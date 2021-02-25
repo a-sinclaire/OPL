@@ -17,15 +17,15 @@ in input, or raises OCaml exception Eval_error if
 the computation fails
 *)
 let rec step (e : exp) = match e with
-    | True -> True
-    | False -> False
+    | True -> raise Eval_error
+    | False -> raise Eval_error
     | If(e1, e2, e3) -> (
         match e1 with
         | True -> e2
         | False -> e3
         | Num(n) -> raise Eval_error
         | otherwise -> If(step(e1), e2, e3))
-    | Num(n) -> Num(n)
+    | Num(n) -> raise Eval_error
     | IsZero(e) ->  (
         match e with
         | Num(n) -> if (n = 0) then True else False
