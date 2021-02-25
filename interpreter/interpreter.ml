@@ -17,15 +17,12 @@ in input, or raises OCaml exception Eval_error if
 the computation fails
 *)
 let rec step (e : exp) = match e with
-    | True -> raise Eval_error
-    | False -> raise Eval_error
     | If(e1, e2, e3) -> (
         match e1 with
         | True -> e2
         | False -> e3
         | Num(n) -> raise Eval_error
         | otherwise -> If(step(e1), e2, e3))
-    | Num(n) -> raise Eval_error
     | IsZero(e) ->  (
         match e with
         | Num(n) -> if (n = 0) then True else False
@@ -72,7 +69,6 @@ let rec multi_step (e : exp) = match e with
     | IsZero(e) -> multi_step(step(IsZero(e)))
     | Plus(e1, e2) -> multi_step(step(Plus(e1, e2)))
     | Mult(e1, e2) -> multi_step(step(Mult(e1, e2)))
-    | otherwise -> raise Eval_error
 
 
 (* Brought in from interpreter_bigstep for testing *)
