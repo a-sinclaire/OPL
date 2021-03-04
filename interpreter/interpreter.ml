@@ -1,4 +1,7 @@
 exception Eval_error
+exception Type_error
+
+type typ = TBool | TInt
 
 type exp = 
     | True
@@ -8,6 +11,53 @@ type exp =
     | IsZero of exp
     | Plus of exp * exp
     | Mult of exp * exp
+
+(* 
+The function type_check takes in input an expression and returns the
+type of that expression according to the type system that we have seen
+in class, or the function raises the OCaml exception Type_error when
+type checking fails
+*)
+let rec type_check (e : exp) = match e with
+    | True -> TBool
+    | False -> TBool
+    | Num(n) -> TInt
+    | If(e1, e2, e3) -> (
+        match (type_check e2) with
+        | TBool -> (
+            match (type_check e3) with
+            | TBool -> TBool
+            | otherwise -> raise Type_error
+        )
+        | TInt -> (
+            match (type_check e3) with
+            | TInt -> TInt
+            | otherwise -> raise Type_error
+        )
+    )
+    | IsZero(e1) -> (
+        match (type_check e1) with
+        | TInt -> TBool
+        | otherwise -> raise Type_error
+    )
+    | Plus(e1, e2) -> (
+        match (type_check e1) with
+        | TInt -> (
+            match (type_check e2) with
+            | TInt -> TInt
+            | otherwise -> raise Type_error
+        )
+        | otherwise -> raise Type_error
+    )
+    | Mult(e1, e2) -> (
+        match (type_check e1) with
+        | TInt -> (
+            match (type_check e2) with
+            | TInt -> TInt
+            | otherwise -> raise Type_error
+        )
+        | otherwise -> raise Type_error
+    )
 
 (*
 The function step takes in input an
@@ -70,7 +120,6 @@ let rec multi_step (e : exp) = match e with
     | Plus(e1, e2) -> multi_step(step(Plus(e1, e2)))
     | Mult(e1, e2) -> multi_step(step(Mult(e1, e2)))
 
-
 (* Brought in from interpreter_bigstep for testing *)
 let rec string_of_exp exp = match exp with
     | True -> "true"
@@ -81,86 +130,77 @@ let rec string_of_exp exp = match exp with
     | Plus(e1, e2) -> "(" ^ (string_of_exp e1) ^ " + " ^ (string_of_exp e2) ^ ")"
     | Mult(e1, e2) -> "(" ^ (string_of_exp e1) ^ " * " ^ (string_of_exp e2) ^ ")"
 
+let rec string_of_typ typ = match typ with
+    | TBool -> "TBool"
+    | TInt -> "TInt"
 
 let () =
-    print_endline ("\n1-5\n");
-    (* 1-5 COMPLETE*)
-    print_endline (string_of_exp (multi_step True));
-    print_endline (string_of_exp (multi_step False));
-    print_endline (string_of_exp (multi_step (Num 0)));
-    print_endline (string_of_exp (multi_step (IsZero (Num 0))));
-    print_endline (string_of_exp (multi_step (IsZero (Plus (Num 1, Num 1)))));
+    (print_endline "\n1-6\n");
+    (* 1-6 *)
+    (print_endline (string_of_typ (type_check (True) )));
+    (print_endline (string_of_typ (type_check (False) )));
+    (print_endline (string_of_typ (type_check (Num 0) )));
+    (print_endline (string_of_typ (type_check (IsZero (Num 0)) )));
+    (print_endline (string_of_typ (type_check (IsZero (Plus (Num 1, Num 1))) )));
+    (print_endline (string_of_typ (type_check (IsZero (Plus (Plus (Num 2, Num (-1)), Num(1)))) )));
 
-    print_endline ("\n6-9\n");
-    (* 6-9 COMPLETE*)
-    print_endline (string_of_exp (multi_step (IsZero (Plus (Plus (Num 2, Num (-1)), Num 1)))));
-    print_endline (string_of_exp (multi_step (Plus (Plus (Num (-1), Num 1), Plus (Num (-1), Num 1)))));
-    print_endline (string_of_exp (multi_step (Plus (Num (-1), Plus (Mult (Num 2, Num 2), Num 1)))));
-    print_endline (string_of_exp (multi_step (Plus (Plus (Plus (Num 2, Num (-1)), Num 1), Num (-1)))));
-
-    print_endline ("\n10-15\n");
-    (* 10-15 COMPLETE*)
-    (* print_endline (string_of_exp (multi_step (Plus (IsZero (Plus (Num (-1), Num 1)), Num 1)))); *)
-    (* print_endline (string_of_exp (multi_step (IsZero (If (IsZero (Num 0), True, Num 0))))); *)
-    (* print_endline (string_of_exp (multi_step
-                                            (IsZero
+    (print_endline "\n7-13\n");
+    (* 7-13 *)
+    (print_endline (string_of_typ (type_check (Plus (Plus (Num (-1), Num 1), Plus (Num (-1), Num 1))) )));
+    (print_endline (string_of_typ (type_check (Plus (Num (-1), Plus (Mult (Num 2, Num 2), Num 1))) )));
+    (print_endline (string_of_typ (type_check (Plus (Plus (Plus (Num 2, Num (-1)), Num 1), Num (-1))) )));
+    (* (print_endline (string_of_typ (type_check (Plus (IsZero (Plus (Num (-1), Num 1)), Num 1)) ))); *)
+    (* (print_endline (string_of_typ (type_check (IsZero (If (IsZero (Num 0), True, Num 0))) ))); *)
+    (* (print_endline (string_of_typ (type_check (IsZero
                                                 (If
                                                     ( IsZero (Mult (Num 5, Num 0))
                                                     , If (False, Num 0, IsZero (Plus (Num (-1), Num 0)))
-                                                    , Num 0 ))))); *)
-    print_endline (string_of_exp (multi_step (If (IsZero (Plus (Num (-1), Num 1)), Num 2, True))));
-    print_endline (string_of_exp (multi_step
-                                            (If
-                                                ( If (IsZero (Mult (Plus (Num 1, Num (-1)), Num 1)), False, True)
-                                                , Mult (Num 1, Num 2)
-                                                , True ))));
-    print_endline (string_of_exp (multi_step
-                                            (If
-                                                ( If (IsZero (Mult (Num 0, Num 0)), IsZero (Num 2), Num 0)
-                                                , Mult (Num 2, Mult (Num 1, Num 1))
-                                                , Plus
-                                                    ( Plus
-                                                        ( Plus
-                                                            ( Plus (If (IsZero (Num 0), Num 1, Num 0), Num (-1))
-                                                            , Num 1 )
-                                                        , Num (-1) )
-                                                    , Num 1 ) ))));
+                                                    , Num 0 ))) ))); *)
+    (* (print_endline (string_of_typ (type_check (If (IsZero (Plus (Num (-1), Num 1)), Num 2, True)) ))); *)
 
-    print_endline ("\n16-20\n");
-    (* 16-20 COMPLETE*)
-    print_endline (string_of_exp (multi_step
-                                            (If
+    (print_endline "\n14-20\n");
+    (* 14-20 *)
+    (* (print_endline (string_of_typ (type_check
+                                        (If
+                                            ( If (IsZero (Mult (Plus (Num 1, Num (-1)), Num 1)), False, True)
+                                            , Mult (Num 1, Num 2)
+                                            , True ))))); *)
+    (* (print_endline (string_of_typ (type_check (If
+                                            ( If (IsZero (Mult (Num 0, Num 0)), IsZero (Num 2), Num 0)
+                                            , Mult (Num 2, Mult (Num 1, Num 1))
+                                            , Plus
+                                                ( Plus
+                                                    ( Plus
+                                                        ( Plus (If (IsZero (Num 0), Num 1, Num 0), Num (-1))
+                                                        , Num 1 )
+                                                    , Num (-1) )
+                                                , Num 1 ) )) ))); *)
+    (print_endline (string_of_typ (type_check (If
+                                            ( True
+                                            , If (True, Mult (If (False, Num 0, Num 1), Num 1), Num 5)
+                                            , Plus (Mult (Num 4, Num 1), Num 1) )) )));
+    (print_endline (string_of_typ (type_check (If
+                                            ( IsZero (If (IsZero (Plus (Num (-1), Num 2)), Num 0, Num 1))
+                                            , If
                                                 ( True
-                                                , If (True, Mult (If (False, Num 0, Num 1), Num 1), Num 5)
-                                                , Plus (Mult (Num 4, Num 1), Num 1) ))));
-    print_endline (string_of_exp (multi_step
-                                            (If
-                                                ( IsZero (If (IsZero (Plus (Num (-1), Num 2)), Num 0, Num 1))
-                                                , If
-                                                    ( True
-                                                    , If (False, Mult (Num 0, Num 6), Plus (Num 0, Num 1))
-                                                    , Num 5 )
-                                                , Num 5 ))));
-    (* print_endline (string_of_exp (multi_step
-                                            (If
-                                                ( IsZero (Plus (Num (-1), Plus (Num 1, Plus (Num (-1), Num 1))))
-                                                , IsZero True
-                                                , Num 1 )))); *)
-    print_endline (string_of_exp (multi_step
-                                            (Plus
-                                                ( Num 1
-                                                , Plus
-                                                    ( Num (-1)
-                                                    , If
-                                                        ( IsZero (Plus (Num 1, If (True, Num 1, Num 2)))
-                                                        , Plus (Num 1, Num 2)
-                                                        , Mult (Num 2, Num 2) ) ) ))));
-    (* print_endline (string_of_exp (multi_step
-                                            (Plus
+                                                , If (False, Mult (Num 0, Num 6), Plus (Num 0, Num 1))
+                                                , Num 5 )
+                                            , Num 5 )) )));
+    (* (print_endline (string_of_typ (type_check (If
+                                            ( IsZero (Plus (Num (-1), Plus (Num 1, Plus (Num (-1), Num 1))))
+                                            , IsZero True
+                                            , Num 1 )) ))); *)
+    (print_endline (string_of_typ (type_check (Plus
+                                            ( Num 1
+                                            , Plus
                                                 ( Num (-1)
                                                 , If
-                                                    ( IsZero (Plus (Num 5, Num (-4)))
-                                                    , Mult (Num 123, Plus (Num 5, Num (-4)))
-                                                    , IsZero (Num 0) ) )))); *)
-
-
+                                                    ( IsZero (Plus (Num 1, If (True, Num 1, Num 2)))
+                                                    , Plus (Num 1, Num 2)
+                                                    , Mult (Num 2, Num 2) ) ) )) )));
+    (* (print_endline (string_of_typ (type_check (Plus
+                                            ( Num (-1)
+                                            , If
+                                                ( IsZero (Plus (Num 5, Num (-4)))
+                                                , Mult (Num 123, Plus (Num 5, Num (-4)))
+                                                , IsZero (Num 0) ) )) ))); *)
