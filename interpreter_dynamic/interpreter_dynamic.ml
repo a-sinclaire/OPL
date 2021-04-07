@@ -1,5 +1,6 @@
 exception Eval_error
 exception Substitution_error
+exception NoMatchingEnvironmentVariable
 
 type typ =
     | TBool
@@ -20,7 +21,9 @@ type exp =
     | Lambda of string * exp
     | Apply of exp * exp
     | TypeError
+    | Let of string * exp * exp
 
+type environment = (string * exp) list
 
 let rec find e l = match l with
     | [] -> false
@@ -33,6 +36,10 @@ let rec union l1 l2 = match l1 with
 let rec remove e l = match l with
     | [] -> []
     | a :: rest -> if a = e then remove e rest else a :: (remove e rest)
+
+let rec match_elem e l = match l with
+    | [] -> raise NoMatchingEnvironmentVariable
+    | a :: rest -> if (fst a = e) then (l, snd a) else (match_elem e rest)
 
 (* 
 returns a list of strings, which are the names of the variables that are
@@ -50,6 +57,7 @@ let rec free_variables (e : exp) = match e with
     | Var(s) -> [Var(s)]
     | Lambda(var, body) -> (remove (Var var) (free_variables body))
     | Apply(func, v) -> (free_variables func)
+    | Let(v,e1,e2) -> (remove (Var v) (union (free_variables e1) (free_variables e2)))
     | otherwise -> []
 
 (* 
@@ -75,6 +83,7 @@ let rec substitution (e1 : exp) (x : string) (e2 : exp) = match e1 with
     | Mult(pe1, pe2) -> Mult(substitution pe1 x e2, substitution pe2 x e2)
     | Lambda(var, body) -> if ( (var = x) || (find (Var(var)) (free_variables e2)) ) then Lambda(var, body) else Lambda(var, (substitution body x e2))
     | Apply(ae1, ae2) -> Apply((substitution ae1 x e2), (substitution ae2 x e2))
+    | Let(v,le1,le2) -> if (v = x) then (Let(v, (substitution le1 x e2), le2)) else ( if (find (Var v) (free_variables e2)) then (raise Substitution_error) else (Let(v, (substitution le1 x e2), (substitution le2 x e2))) )
     | otherwise -> raise Substitution_error
 
 (* 
@@ -93,86 +102,78 @@ results from computing one step of the expression
 in input, or raises OCaml exception Eval_error if
 the computation fails
 *)
-let rec step (e : exp) = match e with
+let rec step (env : environment) (e : exp) : (environment * exp) = match e with
     | If(e1, e2, e3) -> (
         match e1 with
-        | True -> e2
-        | False -> e3
-        | Num(n) -> TypeError
-        | Lambda(v,b) -> TypeError
-        | TypeError -> TypeError
-        | otherwise -> If(step(e1), e2, e3))
+        | True -> (env, e2)
+        | False -> (env, e3)
+        | Num(n) -> (env, TypeError)
+        | Lambda(v,b) -> (env, TypeError)
+        | TypeError -> (env, TypeError)
+        | otherwise -> let p = (step env e1) in (union (fst p) env, If(snd p, e2, e3))
+    )
     | IsZero(e) ->  (
         match e with
-        | Num(n) -> if (n = 0) then True else False
-        | True -> TypeError
-        | False -> TypeError
-        | Lambda(v,b) -> TypeError
-        | TypeError -> TypeError
-        | otherwise -> IsZero(step(e)))
+        | Num(n) -> if (n = 0) then (env, True) else (env, False)
+        | True -> (env, TypeError)
+        | False -> (env, TypeError)
+        | Lambda(v,b) -> (env, TypeError)
+        | TypeError -> (env, TypeError)
+        | otherwise -> let p = step env e in (union (fst p) env, IsZero(snd p)))
     | Plus(e1, e2) -> (
         match e1 with
         | Num(n1) -> (
             match e2 with
-            | Num(n2) -> Num(n1+n2)
-            | True -> TypeError
-            | False -> TypeError
-            | Lambda(v,b) -> TypeError
-            | TypeError -> TypeError
-            | otherwise -> Plus(e1, step(e2)))
-        | True -> TypeError
-        | False -> TypeError
-        | Lambda(v,b) -> TypeError
-        | TypeError -> TypeError
-        | otherwise -> Plus(step(e1), e2))
+            | Num(n2) -> (env, Num(n1+n2))
+            | True -> (env, TypeError)
+            | False -> (env, TypeError)
+            | Lambda(v,b) -> (env, TypeError)
+            | TypeError -> (env, TypeError)
+            | otherwise -> let p = step env e2 in (union (fst p) env, Plus(e1, snd p)))
+        | True -> (env, TypeError)
+        | False -> (env, TypeError)
+        | Lambda(v,b) -> (env, TypeError)
+        | TypeError -> (env, TypeError)
+        | otherwise -> let p = step env e1 in (union (fst p) env, Plus(snd p, e2)))
     | Mult(e1, e2) -> (
         match e1 with
         | Num(n1) -> (
             match e2 with
-            | Num(n2) -> Num(n1*n2)
-            | True -> TypeError
-            | False -> TypeError
-            | Lambda(v,b) -> TypeError
-            | TypeError -> TypeError
-            | otherwise -> Mult(e1, step(e2)))
-        | True -> TypeError
-        | False -> TypeError
-        | Lambda(v,b) -> TypeError
-        | TypeError -> TypeError
-        | otherwise -> Mult(step(e1), e2))
-    (* Apply --- reduction rules 1-2-3 --- e1 is func, e2 is arg (v)
-    
-    1)
-    e1 --> e1'
-    -------------------
-    (e1 e2) --> e1' e2
-    
-    2)
-    e2 --> e2'
-    -------------------
-    (v e2) --> (v e2')
-
-    3)
-    ((\lambda x.e) v) --> e[v/x]
-    *)
-    | Apply(func, arg) -> (
-        match func with
+            | Num(n2) -> (env, Num(n1*n2))
+            | True -> (env, TypeError)
+            | False -> (env, TypeError)
+            | Lambda(v,b) -> (env, TypeError)
+            | TypeError -> (env, TypeError)
+            | otherwise -> let p = step env e2 in (union (fst p) env, Mult(e1, snd p)))
+        | True -> (env, TypeError)
+        | False -> (env, TypeError)
+        | Lambda(v,b) -> (env, TypeError)
+        | TypeError -> (env, TypeError)
+        | otherwise -> let p = step env e1 in (union (fst p) env, Mult(snd p, e2)))
+    | Apply(e1, e2) -> (
+        match e1 with
         | Lambda(var, body) -> (
-            match arg with
-            | Num(n) -> (substitution body var arg)
-            | True -> (substitution body var arg)
-            | False -> (substitution body var arg)
-            | Lambda(v,b) -> (substitution body var (Lambda(v,b)))
-            | Var(x) -> TypeError
-            | TypeError -> TypeError
-            | notValue -> Apply(func, step arg))
-        | Var(x) -> TypeError
-        | Num(n) -> TypeError
-        | True -> TypeError
-        | False -> TypeError
-        | TypeError -> TypeError
-        | notLambda -> Apply(step func, arg))
-    | otherwise -> TypeError
+            match e2 with
+            | True -> ((var,True)::env), body
+            | False -> ((var,False)::env), body
+            | Num(n) -> ((var,Num n)::env), body
+            | Lambda(v,b) -> ((var,Lambda(v,b))::env), body
+            | TypeError -> ((var,TypeError)::env), body
+            | notValue -> let p = step env e2 in ((var, e2)::env), Apply(Lambda(var,body), snd p)
+        )
+        | True -> (env, TypeError)
+        | False -> (env, TypeError)
+        | Num(n) -> (env, TypeError)
+        | TypeError -> (env, TypeError)
+        | notLambda -> let p = step env e1 in (env, Apply(snd p, e2))
+        )
+    | Var(x) -> (
+        match env with
+        | [] -> (env, TypeError)
+        | elem :: rest -> if fst elem = x then (env, snd elem) else step rest (Var(x))
+    )
+    | Let(v, e1, e2) -> (env, Apply(Lambda(v,e2), e1))
+    | otherwise -> (env, TypeError)
 
 
 (*
@@ -182,18 +183,20 @@ to evaluate the expression one step at a time until
 it returns a value, or raises OCaml exception Eval_error
 if the computation fails
 *)
-let rec multi_step (e : exp) = match e with
-    | True -> True
-    | False -> False
-    | If(e1, e2, e3) -> multi_step(step(If(e1,e2,e3)))
-    | Num(n) -> Num(n)
-    | Var(x) -> Var(x)
-    | IsZero(e) -> multi_step(step(IsZero(e)))
-    | Plus(e1, e2) -> multi_step(step(Plus(e1, e2)))
-    | Mult(e1, e2) -> multi_step(step(Mult(e1, e2)))
-    | Apply(e1, e2) -> multi_step(step(Apply(e1, e2)))
-    | Lambda(var, body) -> Lambda(var, body)
-    | TypeError -> TypeError
+let rec multi_step (env : environment) (e : exp) : (environment * exp) = match e with
+    | True -> (env, True)
+    | False -> (env, False)
+    | Num(n) -> (env, Num(n))
+    | Lambda(var, body) -> (env, Lambda(var, body))
+    | TypeError -> (env, TypeError)
+    | otherwise -> let afterstep = step env e in multi_step (fst afterstep) (snd afterstep)
+    (* | If(e1, e2, e3) -> let afterstep =(step env e) in (multi_step (fst afterstep) (snd afterstep))
+    | Var(x) -> (multi_step (fst(step env (Var x))) (snd(step env (Var x))) )
+    | IsZero(ze) -> (multi_step (fst(step env (IsZero(e)))) (snd(step env (IsZero(e)))) )
+    | Plus(e1, e2) -> (multi_step (fst(step env (Plus(e1, e2)))) (snd(step env (Plus(e1, e2)))) )
+    | Mult(e1, e2) -> (multi_step (fst(step env (Mult(e1, e2)))) (snd(step env (Mult(e1, e2)))) )
+    | Apply(e1, e2) -> (multi_step (fst(step env (Apply(e1, e2)))) (snd(step env (Apply(e1, e2)))) )
+    | Let(s,e1,e2) -> (multi_step (fst(step env (Let(s,e1,e2)))) (snd(step env (Let(s,e1,e2)))) ) *)
     
 
 let rec string_of_typ (t : typ) = match t with
@@ -214,18 +217,59 @@ let rec string_of_exp (e : exp) = match e with
     | Lambda(var, e) -> "(lambda " ^ var ^ "." ^ (string_of_exp e) ^ ")"
     | Apply(e1, e2) -> "(" ^ (string_of_exp e1) ^ ", " ^ (string_of_exp e2) ^ ")"
     | TypeError -> "TypeError"
-    
+    | Let(s,e1,e2) -> "Test"
+
+let rec string_of_env env = match env with
+    | [] -> "()"
+    | elem :: rest -> "(" ^ (fst elem) ^ ", " ^ string_of_exp (snd elem) ^ ")" ^ (string_of_env rest)
+
 
 let () =
     (* DYNAMIC TYPING *)
-    (print_endline "\n1\n");
+    (print_endline "\nDynamicScoping\n--------------");
     (* 1 *)
-    (print_endline (string_of_exp (multi_step (If (IsZero (Plus (True, Num 4)), Num 3, Num 4)))
-                ));
+    (print_endline (string_of_exp (multi_step [] (Let ("x", Num 5, Num 1)) |> snd) ));
+    (* (print_endline (string_of_env (multi_step [] (Let ("x", Num 5, Num 1)) |> fst) ));
+    (print_endline ""); *)
 
-    (print_endline "\n2-3\n");
-    (* 2-3 *)
-    (print_endline (string_of_exp (multi_step
+    (* 2 *)
+    (print_endline (string_of_exp (multi_step [] (Let ("x", Num 5, Plus (Var "x", Num 5))) |> snd) ));
+    (* (print_endline (string_of_env (multi_step [] (Let ("x", Num 5, Plus (Var "x", Num 5))) |> fst) ));
+    (print_endline ""); *)
+
+    (* 3 *)
+    (print_endline (string_of_exp ( multi_step [] (Let ("x", Num 3, Let ("y", Num 5, Mult (Var "x", Var "y")))) |> snd ) ));
+    (* (print_endline (string_of_env ( multi_step [] (Let ("x", Num 3, Let ("y", Num 5, Mult (Var "x", Var "y")))) |> fst ) ));
+    (print_endline ""); *)
+
+    (* 4 *)
+    (print_endline (string_of_exp ( multi_step [] (Let ("x", Num 3, Let ("x", Num 5, Mult (Var "x", Var "x")))) |> snd ) ));
+    (* (print_endline (string_of_env ( multi_step [] (Let ("x", Num 3, Let ("x", Num 5, Mult (Var "x", Var "x")))) |> fst ) ));
+    (print_endline ""); *)
+
+    (* 5 *)
+    (print_endline (string_of_exp ( multi_step [] (Mult ( Apply ( Lambda ("b", If (Var "b", Let ("x", Num 2, Num 1), Num 0)), True ), Var "x" ) ) |> snd ) ));
+    (* (print_endline (string_of_env ( multi_step [] (Mult ( Apply ( Lambda ("b", If (Var "b", Let ("x", Num 2, Num 1), Num 0)), True ), Var "x" ) ) |> fst ) ));
+    (print_endline ""); *)
+
+    (* 6 *)
+    (print_endline (string_of_exp ( multi_step [] ( Plus ( Apply ( Lambda ( "n", If ( IsZero (Var "n"), Let ("x", Num 5, Var "n"), Let ( "n", Num 6, Let ("x", Plus (Var "n", Num 1), Var "n") )
+                    ) ), Num 0 ), Var "x" ) ) |> snd ) ));
+    (* (print_endline (string_of_env ( multi_step [] ( Plus ( Apply ( Lambda ( "n", If ( IsZero (Var "n"), Let ("x", Num 5, Var "n"), Let ( "n", Num 6, Let ("x", Plus (Var "n", Num 1), Var "n") )
+                    ) ), Num 0 ), Var "x" ) ) |> fst ) ));
+    (print_endline ""); *)
+
+    (* 7 *)
+    (print_endline (string_of_exp ( multi_step [] ( Let ( "x", Num 1, Let ( "f", Lambda ("a", Plus (Var "x", Var "a")), Let
+                ( "g", Lambda ("a", Let ("x", Num 2, Apply (Var "f", Var "a"))), Apply (Var "g", Num 3) ) ) ) ) |> snd ) ));
+    (* (print_endline (string_of_env ( multi_step [] ( Let ( "x", Num 1, Let ( "f", Lambda ("a", Plus (Var "x", Var "a")), Let
+                ( "g", Lambda ("a", Let ("x", Num 2, Apply (Var "f", Var "a"))), Apply (Var "g", Num 3) ) ) ) ) |> fst ) )); *)
+
+
+
+(print_endline "\n\nDynamicTyping\n--------------");
+(print_endline (string_of_exp (multi_step [] (If (IsZero (Plus (True, Num 4)), Num 3, Num 4))|>snd) ));
+(print_endline (string_of_exp (multi_step []  
    (Apply
       ( Apply
           ( Lambda
@@ -234,8 +278,8 @@ let () =
                   ("myfunction", Apply (Var "myfunction", Var "mybool"))
               )
           , Lambda ("x", Plus (Var "x", Var "x")) )
-      , True ))) ));
-    (print_endline (string_of_exp (multi_step
+      , True ))|>snd) ));
+(print_endline (string_of_exp (multi_step []  
    (Apply
       ( Lambda
           ( "b"
@@ -245,11 +289,8 @@ let () =
                   , Apply (Lambda ("x", Mult (Var "x", Num 1)), Var "x")
                   )
               , If (Var "b", Plus (Num 5, Num 37), False) ) )
-      , True ))) ));
-
-    (print_endline "\n4-5\n");
-    (* 4-5 *)
-    (print_endline (string_of_exp (multi_step
+      , True ))|>snd) ));
+(print_endline (string_of_exp (multi_step []  
    (Apply
       ( Lambda
           ( "b"
@@ -259,21 +300,20 @@ let () =
                   , Apply (Lambda ("x", Mult (Var "x", Num 1)), Var "x")
                   )
               , If (Var "b", Plus (Num 5, Num 37), False) ) )
-      , False ))) ));
-    (print_endline (string_of_exp (multi_step
+      , False ))|>snd)
+ ));
+(print_endline (string_of_exp (multi_step []  
    (Apply
       ( Lambda ("f", Apply (Var "f", Num 1))
       , Lambda
-          ("x", Mult (Var "x", If (IsZero (Var "x"), False, Num 7))) ))) ));
-
-    (print_endline "\n6-7\n");
-    (* 6-7 *)
-    (print_endline (string_of_exp (multi_step
+          ("x", Mult (Var "x", If (IsZero (Var "x"), False, Num 7))) ))|>snd)
+ ));
+(print_endline (string_of_exp (multi_step [] 
    (Apply
       ( Lambda ("f", Apply (Var "f", Num 1))
       , Lambda
-          ("x", Mult (Var "x", If (IsZero (Var "y"), False, Num 7))) ))) ));
-    (print_endline (string_of_exp (multi_step
+          ("x", Mult (Var "x", If (IsZero (Var "y"), False, Num 7))) ))|>snd) ));
+(print_endline (string_of_exp (multi_step []  
    (Apply
       ( Lambda
           ( "f"
@@ -295,4 +335,4 @@ let () =
                   , If
                       ( IsZero (Var "x")
                       , If (Var "b", Num (-1), False)
-                      , Num 1 ) ) ) ) ))) ));
+                      , Num 1 ) ) ) ) ))|>snd) ));
