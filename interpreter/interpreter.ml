@@ -20,6 +20,7 @@ type exp =
     | Var of string
     | Lambda of string * typ * exp
     | Apply of exp * exp
+    | LambdaRec of string * typ * typ * string * exp
 
 
 let rec find e l = match l with
@@ -50,10 +51,12 @@ let rec free_variables (e : exp) = match e with
     | Var(s) -> [Var(s)]
     | Lambda(var, typ, body) -> (remove (Var var) (free_variables body))
     | Apply(func, v) -> (free_variables func)
+    | LambdaRec(name, t1, t2, var, body) -> (remove (Var var) (remove (Var name) (free_variables body)))
 
-let notBool bool = match bool with
-    |true -> false
-    |false -> true
+
+let not x = match x with
+    | true -> false
+    | false -> true
 
 (* 
 (substitution e1 "x" e2) replaces all the free occurances of "x" in the
@@ -78,7 +81,19 @@ let rec substitution (e1 : exp) (x : string) (e2 : exp) = match e1 with
     | Mult(pe1, pe2) -> Mult(substitution pe1 x e2, substitution pe2 x e2)
     | Lambda(var, typ, body) -> if ( (var = x) || (find (Var(var)) (free_variables e2)) ) then Lambda(var, typ, body) else Lambda(var, typ, (substitution body x e2))
     | Apply(ae1, ae2) -> Apply((substitution ae1 x e2), (substitution ae2 x e2))
-    (* | otherwise -> raise Substitution_error *)
+    | LambdaRec(name, t1, t2, var, body) -> if ( (var = x) || (name = x) ) then (
+            LambdaRec(name, t1, t2, var, body) 
+        ) else (
+            if ( (var != x) && (name != x) ) then (
+                if ((not (find (Var(var)) (free_variables e2))) && (not (find (Var(name)) (free_variables e2))) ) then (
+                    LambdaRec(name, t1, t2, var, (substitution body x e2))
+                ) else (
+                    raise Substitution_error
+                )
+            ) else (
+                raise Substitution_error
+        )
+    )
 
 (* 
 The function type_check takes in input an expression and returns the
@@ -161,6 +176,9 @@ let rec type_check (te : type_environment) (e : exp) = match e with
         | Lambda(varname, t, e) -> type_check((varname,t)::te, e)
         | Var(varname) -> lookup in te for varname and if its not there then you raise Type_error
      *)
+     | LambdaRec(f, t1, t2, x, body) -> (
+        if ((type_check (((f,(TArrow(t1,t2)))::(x,t1)::te)) body) = t2) then (TArrow(t1,t2)) else (raise Type_error)
+     )
 
 (*
 The function step takes in input an
@@ -204,21 +222,6 @@ let rec step (e : exp) = match e with
         | True -> raise Eval_error
         | False -> raise Eval_error
         | otherwise -> Mult(step(e1), e2))
-    (* Apply --- reduction rules 1-2-3 --- e1 is func, e2 is arg (v)
-    
-    1)
-    e1 --> e1'
-    -------------------
-    (e1 e2) --> e1' e2
-    
-    2)
-    e2 --> e2'
-    -------------------
-    (v e2) --> (v e2')
-
-    3)
-    ((\lambda x.e) v) --> e[v/x]
-    *)
     | Apply(func, arg) -> (
         match func with
         | Lambda(var, typ, body) -> (
@@ -227,6 +230,16 @@ let rec step (e : exp) = match e with
             | True -> (substitution body var arg)
             | False -> (substitution body var arg)
             | Lambda(v,t,b) -> (substitution body var (Lambda(v,t,b)))
+            | LambdaRec(name, t1, t2, var, body) -> (substitution body var arg)
+            | Var(x) -> raise Eval_error
+            | notValue -> Apply(func, step arg))
+        | LambdaRec(name, t1, t2, var, body) -> (
+            match arg with
+            | Num(n) -> (substitution (substitution body var arg) name (LambdaRec(name, t1, t2, var, body)))
+            | True -> (substitution (substitution body var arg) name (LambdaRec(name, t1, t2, var, body)))
+            | False -> (substitution (substitution body var arg) name (LambdaRec(name, t1, t2, var, body)))
+            | Lambda(v,t,b) -> (substitution (substitution body var arg) name (LambdaRec(name, t1, t2, var, body)))
+            | LambdaRec(name, t1, t2, var, body) -> (substitution (substitution body var arg) name (LambdaRec(name, t1, t2, var, body)))
             | Var(x) -> raise Eval_error
             | notValue -> Apply(func, step arg))
         | Var(x) -> raise Eval_error
@@ -234,7 +247,7 @@ let rec step (e : exp) = match e with
         | True -> raise Eval_error
         | False -> raise Eval_error
         | notLambda -> Apply(step func, arg))
-    | otherwise -> raise Eval_error
+    (* | otherwise -> raise Eval_error *)
 
 
 (*
@@ -255,6 +268,7 @@ let rec multi_step (e : exp) = match e with
     | Mult(e1, e2) -> multi_step(step(Mult(e1, e2)))
     | Apply(e1, e2) -> multi_step(step(Apply(e1, e2)))
     | Lambda(var, typ, body) -> Lambda(var, typ, body)
+    | LambdaRec(name, t1, t2, var, body) -> LambdaRec(name, t1, t2, var, body)
     
 
 let rec string_of_typ (t : typ) = match t with
@@ -274,160 +288,92 @@ let rec string_of_exp (e : exp) = match e with
     | Var(x) -> x
     | Lambda(var, typ, e) -> "(lambda " ^ var ^ ":" ^ (string_of_typ typ) ^ "." ^ (string_of_exp e) ^ ")"
     | Apply(e1, e2) -> "(" ^ (string_of_exp e1) ^ ", " ^ (string_of_exp e2) ^ ")"
+    | LambdaRec(name, t1, t2, var, body) -> "(LambdaRec (" ^ name ^ " : " ^ (string_of_typ t1) ^ " -> " ^ (string_of_typ t2) ^ ") " ^ var ^ " = " ^ (string_of_exp body) ^ ")"
     
-
 let () =
-    (* LAMBDA CALCULUS *)
-    (print_endline "\n1-4\n");
-    (* 1-4 *)
-    (print_endline (string_of_exp (substitution
-       (Mult (Plus (Num 5, Var "x"), Plus (Num 3, Var "x")))
-       "x" (Num 2))));
-    (print_endline (string_of_exp (substitution
-       (If (IsZero (Var "y"), Var "y", Var "x"))
-       "y"
-       (Mult (Num 5, Var "x")))));
-    (print_endline (string_of_exp (substitution (Lambda ("x", TInt, Plus (Var "x", Num 5))) "x" (Num 0))));
-    (print_endline (string_of_exp (substitution
-       (Lambda
-          ( "x"
-          , TBool
-          , If (Var "x", Apply (Var "y", Num 0), Apply (Var "y", Num 1)) ))
-       "y"
-       (Lambda ("x", TInt, Plus (Var "x", Num 1))))
- ));
+    (* RECURSION *)
+    (print_endline "\n1-2\n");
+    (* 1-2 *)
 
-    (print_endline "\n5-12\n");
-    (* 5-12 *)
-    (print_endline (string_of_exp (multi_step
-       (Apply
-          ( Lambda
-              ("x", TInt, Mult (Plus (Num 5, Var "x"), Plus (Num 3, Var "x")))
-          , Num 2 ))) ));
-    (print_endline (string_of_exp (multi_step (Lambda ("x", TInt, Plus (Var "x", Num 5)))) ));
-    (* 7 *)
-    (print_endline (string_of_exp (multi_step
-       (Apply
-          ( Apply
-              ( Lambda
-                  ( "y"
-                  , TArrow (TInt, TInt)
-                  , Lambda
-                      ( "x"
-                      , TBool
-                      , If
-                          ( Var "x"
-                          , Apply (Var "y", Num 0)
-                          , Apply (Var "y", Num 1) ) ) )
-              , Lambda ("x", TInt, Plus (Var "x", Num 1)) )
-          , False ))) ));
+    (print_endline (string_of_typ ((type_check []
+   (LambdaRec ("f", TInt, TInt, "x", Plus (Var "x", Var "x")))))) );
 
-    (* 8 *)
-    (print_endline (string_of_exp (multi_step
-      (Apply
-         ( Lambda ("x", TBool, If (Var "x", Num 7, Num 33))
-         , Apply (Lambda ("x", TInt, IsZero (Var "x")), Num 5) ))) ));
-    (* (print_endline (string_of_exp (multi_step (Apply (Lambda ("x", TInt, Plus (Var "x", Var "y")), Num 0))) )); *)
-    (print_endline (string_of_exp (multi_step
-       (Apply
-          ( Apply
-              ( Apply
-                  ( Lambda
-                      ( "x"
-                      , TInt
-                      , Lambda
-                          ( "x"
-                          , TInt
-                          , Lambda
-                              ( "z"
-                              , TInt
-                              , Mult (Plus (Var "x", Var "x"), Var "z") ) )
-                      )
-                  , Num 1 )
-              , Num 2 )
-          , Num 3 )))
- ));
-    (print_endline (string_of_exp (multi_step
-       (Apply
-          ( Lambda
-              ( "x"
-              , TArrow (TInt, TArrow (TInt, TInt))
-              , Apply (Apply (Apply (Var "x", Num 7), Num 6), Num 8) )
-          , Lambda
-              ( "x"
-              , TInt
-              , Lambda
-                  ( "y"
-                  , TInt
-                  , Lambda
-                      ("z", TInt, Plus (Mult (Var "x", Var "y"), Var "z")) )
-              ) ))) ));
-    (* (print_endline (string_of_exp (multi_step (Apply (Plus (Num 5, Num 2), Lambda ("x", TInt, Var "x")))) )); *)
+    (print_endline (string_of_exp ((multi_step (LambdaRec ("f", TInt, TInt, "x", Plus (Var "x", Var "x")))))) );
 
-    (print_endline "\n13-20\n");
-    (* 13-20 *)
-    (print_endline (string_of_typ (type_check []
-       (Apply
-          ( Lambda
-              ("x", TInt, Mult (Plus (Num 5, Var "x"), Plus (Num 3, Var "x")))
-          , Num 2 ))) ));
-    (* 14 *)
-    (print_endline (string_of_typ (type_check [] (Lambda ("x", TInt, Plus (Var "x", Num 5)))) ));
-    (* 15 - WHERE I AM CURRENTLY*)
-    (print_endline (string_of_typ (type_check []
-       (Apply
-          ( Apply
-              ( Lambda
-                  ( "y"
-                  , TArrow (TInt, TInt)
-                  , Lambda
-                      ( "x"
-                      , TBool
-                      , If
-                          ( Var "x"
-                          , Apply (Var "y", Num 0)
-                          , Apply (Var "y", Num 1) ) ) )
-              , Lambda ("x", TInt, Plus (Var "x", Num 1)) )
-          , False ))) ));
-    (print_endline (string_of_typ (type_check []
-       (Apply
-          ( Lambda ("x", TBool, If (Var "x", Num 7, Num 33))
-          , Apply (Lambda ("x", TInt, IsZero (Var "x")), Num 5) ))) ));
-    (* (print_endline (string_of_typ (type_check []
-        (Apply (Lambda ("x", TInt, Plus (Var "x", Var "y")), Num 0))) )); *)
-    (* (print_endline (string_of_typ (type_check []
-        (Apply
-           ( Apply
-               ( Apply
-                   ( Lambda
-                       ( "x"
-                       , TInt
-                       , Lambda
-                           ( "x"
-                           , TInt
-                           , Lambda
-                               ( "z"
-                               , TInt
-                               , Mult (Plus (Var "x", Var "x"), Var "z") ) )
-                       )
-                   , Num 1 )
-               , Num 2 )
-           , Lambda ("x", TInt, Var "x") ))) )); *)
-    (print_endline (string_of_typ (type_check []
-       (Apply
-          ( Lambda
-              ( "x"
-              , TArrow (TInt, TArrow (TInt, TArrow (TInt, TInt)))
-              , Apply (Apply (Var "x", Num 7), Num 6) )
-          , Lambda
-              ( "x"
-              , TInt
-              , Lambda
-                  ( "y"
-                  , TInt
-                  , Lambda
-                      ("z", TInt, Plus (Mult (Var "x", Var "y"), Var "z")) )
-              ) ))) ));
-    (* (print_endline (string_of_typ (type_check []
-        (Apply (Plus (Num 5, Num 2), Lambda ("x", TInt, Var "x"))))
- )); *)
+    (print_endline "\n3-4\n");
+    (* 3-4 *)
+
+    (print_endline (string_of_typ ((type_check []
+   (LambdaRec
+      ( "f"
+      , TInt
+      , TInt
+      , "x"
+      , If
+          ( IsZero (Var "x")
+          , Num 0
+          , Apply (Var "f", Plus (Var "x", Num (-1))) ) ))))) );
+
+    (print_endline (string_of_exp ((multi_step
+   (Apply
+      ( LambdaRec
+          ( "f"
+          , TInt
+          , TInt
+          , "x"
+          , If
+              ( IsZero (Var "x")
+              , Num 0
+              , Apply (Var "f", Plus (Var "x", Num (-1))) ) )
+      , Num 5 ))))) );
+
+    (print_endline "\n5\n");
+    (* 5 *)
+    (print_endline (string_of_typ ((type_check []
+   (LambdaRec
+      ( "f1"
+      , TInt
+      , TArrow (TInt, TInt)
+      , "x1"
+      , LambdaRec
+          ( "f2"
+          , TInt
+          , TInt
+          , "x2"
+          , If
+              ( IsZero (Var "x1")
+              , Apply (Var "f2", Var "x1")
+              , Apply
+                  (Apply (Var "f1", Var "x2"), Plus (Var "x1", Num (-1)))
+              ) ) ))))));
+
+    (print_endline "\n6-7\n");
+    (* 6-7 *)
+    (print_endline (string_of_typ ((type_check []
+   (LambdaRec
+      ( "factorial"
+      , TInt
+      , TInt
+      , "n"
+      , If
+          ( IsZero (Var "n")
+          , Num 1
+          , Mult
+              (Var "n", Apply (Var "factorial", Plus (Var "n", Num (-1))))
+          ) ))))) );
+    (print_endline (string_of_exp ((multi_step
+   (Apply
+      ( LambdaRec
+          ( "factorial"
+          , TInt
+          , TInt
+          , "n"
+          , If
+              ( IsZero (Var "n")
+              , Num 1
+              , Mult
+                  ( Var "n"
+                  , Apply (Var "factorial", Plus (Var "n", Num (-1))) )
+              ) )
+      , Num 6 ))))) );
+    
