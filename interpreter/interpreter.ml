@@ -21,6 +21,9 @@ type exp =
     | Lambda of string * typ * exp
     | Apply of exp * exp
     | LambdaRec of string * typ * typ * string * exp
+    | Div of exp * exp
+    | Try of exp * exp
+    | RaiseDivByZero of typ * exp
 
 
 let rec find e l = match l with
@@ -52,6 +55,9 @@ let rec free_variables (e : exp) = match e with
     | Lambda(var, typ, body) -> (remove (Var var) (free_variables body))
     | Apply(func, v) -> (free_variables func)
     | LambdaRec(name, t1, t2, var, body) -> (remove (Var var) (remove (Var name) (free_variables body)))
+    | Div(e1, e2) -> union (free_variables e1) (free_variables e2)
+    | Try(e1, e2) -> union (free_variables e1) (free_variables e2)
+    | RaiseDivByZero(typ, e1) -> (free_variables e1)
 
 
 let not x = match x with
@@ -94,6 +100,9 @@ let rec substitution (e1 : exp) (x : string) (e2 : exp) = match e1 with
                 raise Substitution_error
         )
     )
+    | Div(de1, de2) -> Div(substitution de1 x e2, substitution de2 x e2)
+    | Try(te1, te2) -> Try(substitution te1 x e2, substitution te2 x e2)
+    | RaiseDivByZero(typ, re1) -> RaiseDivByZero(typ, substitution re1 x e2)
 
 (* 
 The function type_check takes in input an expression and returns the
@@ -179,6 +188,17 @@ let rec type_check (te : type_environment) (e : exp) = match e with
      | LambdaRec(f, t1, t2, x, body) -> (
         if ((type_check (((f,(TArrow(t1,t2)))::(x,t1)::te)) body) = t2) then (TArrow(t1,t2)) else (raise Type_error)
      )
+     | Div(e1, e2) -> (
+        match (type_check te e1) with
+        | TInt -> (
+            match (type_check te e2) with
+            | TInt -> TInt
+            | otherwise -> raise Type_error
+        )
+        | otherwise -> raise Type_error
+    )
+     | Try(e1, e2) -> if TArrow(TInt, (type_check te e1)) = (type_check te e2) then (type_check te e1) else raise Type_error
+     | RaiseDivByZero(typ, n) -> typ
 
 (*
 The function step takes in input an
@@ -193,12 +213,14 @@ let rec step (e : exp) = match e with
         | True -> e2
         | False -> e3
         | Num(n) -> raise Eval_error
+        | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
         | otherwise -> If(step(e1), e2, e3))
     | IsZero(e) ->  (
         match e with
         | Num(n) -> if (n = 0) then True else False
         | True -> raise Eval_error
         | False -> raise Eval_error
+        | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
         | otherwise -> IsZero(step(e)))
     | Plus(e1, e2) -> (
         match e1 with
@@ -207,9 +229,11 @@ let rec step (e : exp) = match e with
             | Num(n2) -> Num(n1+n2)
             | True -> raise Eval_error
             | False -> raise Eval_error
+            | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
             | otherwise -> Plus(e1, step(e2)))
         | True -> raise Eval_error
         | False -> raise Eval_error
+        | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
         | otherwise -> Plus(step(e1), e2))
     | Mult(e1, e2) -> (
         match e1 with
@@ -218,9 +242,11 @@ let rec step (e : exp) = match e with
             | Num(n2) -> Num(n1*n2)
             | True -> raise Eval_error
             | False -> raise Eval_error
+            | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
             | otherwise -> Mult(e1, step(e2)))
         | True -> raise Eval_error
         | False -> raise Eval_error
+        | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
         | otherwise -> Mult(step(e1), e2))
     | Apply(func, arg) -> (
         match func with
@@ -232,6 +258,7 @@ let rec step (e : exp) = match e with
             | Lambda(v,t,b) -> (substitution body var (Lambda(v,t,b)))
             | LambdaRec(name, t1, t2, var, body) -> (substitution body var arg)
             | Var(x) -> raise Eval_error
+            | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
             | notValue -> Apply(func, step arg))
         | LambdaRec(name, t1, t2, var, body) -> (
             match arg with
@@ -241,12 +268,38 @@ let rec step (e : exp) = match e with
             | Lambda(v,t,b) -> (substitution (substitution body var arg) name (LambdaRec(name, t1, t2, var, body)))
             | LambdaRec(name, t1, t2, var, body) -> (substitution (substitution body var arg) name (LambdaRec(name, t1, t2, var, body)))
             | Var(x) -> raise Eval_error
+            | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
             | notValue -> Apply(func, step arg))
         | Var(x) -> raise Eval_error
         | Num(n) -> raise Eval_error
         | True -> raise Eval_error
         | False -> raise Eval_error
+        | RaiseDivByZero(typ, n) -> RaiseDivByZero(typ, n)
         | notLambda -> Apply(step func, arg))
+    | Div(e1, e2) -> (
+        match e1 with
+        | Num(n1) -> (
+            match e2 with
+            | Num(n2) -> if e2 = Num(0) then RaiseDivByZero(TInt, e1) else Num(n1/n2)
+            | True -> raise Eval_error
+            | False -> raise Eval_error
+            | otherwise -> Div(e1, step e2)
+        )
+        | True -> raise Eval_error
+        | False -> raise Eval_error
+        | otherwise -> Div(step e1, e2)
+    )
+    | Try(e1, e2) -> (
+        match e1 with
+        | RaiseDivByZero(typ, v) -> Apply(e2, v)
+        | Div(a,b) -> Try(step e1, e2)
+        | Mult(a,b) -> Try(step e1, e2)
+        | Plus(a,b) -> Try(step e1, e2)
+        | IsZero(a) -> Try(step e1, e2)
+        | If(a,b,c) -> Try(step e1, e2)
+        | Apply(a,b)-> Try(step e1, e2)
+        | value -> e1
+    )
     (* | otherwise -> raise Eval_error *)
 
 
@@ -269,6 +322,9 @@ let rec multi_step (e : exp) = match e with
     | Apply(e1, e2) -> multi_step(step(Apply(e1, e2)))
     | Lambda(var, typ, body) -> Lambda(var, typ, body)
     | LambdaRec(name, t1, t2, var, body) -> LambdaRec(name, t1, t2, var, body)
+    | Div(e1, e2) -> multi_step(step e)
+    | Try(e1, e2) -> multi_step(step e)
+    | RaiseDivByZero(typ, e1) -> RaiseDivByZero(typ, multi_step e1)
     
 
 let rec string_of_typ (t : typ) = match t with
@@ -289,91 +345,45 @@ let rec string_of_exp (e : exp) = match e with
     | Lambda(var, typ, e) -> "(lambda " ^ var ^ ":" ^ (string_of_typ typ) ^ "." ^ (string_of_exp e) ^ ")"
     | Apply(e1, e2) -> "(" ^ (string_of_exp e1) ^ ", " ^ (string_of_exp e2) ^ ")"
     | LambdaRec(name, t1, t2, var, body) -> "(LambdaRec (" ^ name ^ " : " ^ (string_of_typ t1) ^ " -> " ^ (string_of_typ t2) ^ ") " ^ var ^ " = " ^ (string_of_exp body) ^ ")"
+    | Div(e1, e2) -> "(" ^ (string_of_exp e1) ^ " / " ^ (string_of_exp e2) ^ ")"
+    | Try(e1, e2) -> "try (" ^ (string_of_exp e1) ^ ") with (" ^ (string_of_exp e2) ^ ")"
+    | RaiseDivByZero(typ, e1) -> "RaiseDivByZero (" ^ (string_of_typ typ) ^ ", " ^ (string_of_exp e1) ^")"
     
 let () =
-    (* RECURSION *)
-    (print_endline "\n1-2\n");
-    (* 1-2 *)
+    (* EXCEPTIONS *)
+    (print_endline "\n1-3\n");
+    (* 1-3 *)
 
-    (print_endline (string_of_typ ((type_check []
-   (LambdaRec ("f", TInt, TInt, "x", Plus (Var "x", Var "x")))))) );
+    (print_endline (string_of_exp ((multi_step (RaiseDivByZero (TInt, Plus (Num 4, Num 2)))))));
+    (print_endline (string_of_exp ((multi_step (Div (Plus (Num 4, Num 2), Num 0))))));
+    (print_endline (string_of_exp ((multi_step (Try (Plus (Num 4, Num 4), Lambda ("x", TInt, Var "x"))))
+)));
 
-    (print_endline (string_of_exp ((multi_step (LambdaRec ("f", TInt, TInt, "x", Plus (Var "x", Var "x")))))) );
-
-    (print_endline "\n3-4\n");
-    (* 3-4 *)
-
-    (print_endline (string_of_typ ((type_check []
-   (LambdaRec
-      ( "f"
-      , TInt
-      , TInt
-      , "x"
-      , If
-          ( IsZero (Var "x")
-          , Num 0
-          , Apply (Var "f", Plus (Var "x", Num (-1))) ) ))))) );
+   
+    (print_endline "\n4-6\n");
+    (* 4-6 *)
 
     (print_endline (string_of_exp ((multi_step
-   (Apply
-      ( LambdaRec
-          ( "f"
-          , TInt
-          , TInt
-          , "x"
-          , If
-              ( IsZero (Var "x")
-              , Num 0
-              , Apply (Var "f", Plus (Var "x", Num (-1))) ) )
-      , Num 5 ))))) );
+   (Try (Div (Num 4, Num 0), Lambda ("x", TInt, Plus (Var "x", Num 1))))))));
+    (print_endline (string_of_exp ((multi_step (Apply (Lambda ("x", TInt, Var "x"), Div (Num 4, Num 0)))))));
+    (print_endline (string_of_exp ((multi_step (If (IsZero (Div (Num 4, Num 0)), Num 1, Num 2))))));
 
-    (print_endline "\n5\n");
-    (* 5 *)
-    (print_endline (string_of_typ ((type_check []
-   (LambdaRec
-      ( "f1"
-      , TInt
-      , TArrow (TInt, TInt)
-      , "x1"
-      , LambdaRec
-          ( "f2"
-          , TInt
-          , TInt
-          , "x2"
-          , If
-              ( IsZero (Var "x1")
-              , Apply (Var "f2", Var "x1")
-              , Apply
-                  (Apply (Var "f1", Var "x2"), Plus (Var "x1", Num (-1)))
-              ) ) ))))));
+    (print_endline "\n7-9\n");
+    (* 7-9 *)
 
-    (print_endline "\n6-7\n");
-    (* 6-7 *)
+    (print_endline (string_of_typ ((type_check [] (RaiseDivByZero (TInt, Plus (Num 4, Num 2)))))));
     (print_endline (string_of_typ ((type_check []
-   (LambdaRec
-      ( "factorial"
-      , TInt
-      , TInt
-      , "n"
-      , If
-          ( IsZero (Var "n")
-          , Num 1
-          , Mult
-              (Var "n", Apply (Var "factorial", Plus (Var "n", Num (-1))))
-          ) ))))) );
-    (print_endline (string_of_exp ((multi_step
-   (Apply
-      ( LambdaRec
-          ( "factorial"
-          , TInt
-          , TInt
-          , "n"
-          , If
-              ( IsZero (Var "n")
-              , Num 1
-              , Mult
-                  ( Var "n"
-                  , Apply (Var "factorial", Plus (Var "n", Num (-1))) )
-              ) )
-      , Num 6 ))))) );
-    
+   (Try (Div (Num 4, Num 0), Lambda ("x", TInt, Plus (Var "x", Num 1))))))));
+    (print_endline (string_of_typ ((type_check []
+   (If (IsZero (Num 0), RaiseDivByZero (TBool, Num 4), False)))
+)));
+
+    (print_endline "\n10-11\n");
+    (* 10-11 *)
+
+    (* (print_endline (string_of_typ ((type_check []
+   (Try (Div (Num 4, Num 0), Lambda ("x", TBool, Plus (Var "x", Num 1)))))))); *)
+    (* (print_endline (string_of_typ ((type_check []
+   (Try (Div (Num 4, Num 0), Lambda ("x", TInt, False))))))); *)
+
+ 
