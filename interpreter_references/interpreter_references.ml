@@ -7,6 +7,8 @@ type typ =
     | TBool
     | TInt
     | TArrow of typ * typ
+    | TRef of typ
+    | TUnit
 
 type type_environment = (string * typ) list
 
@@ -50,6 +52,13 @@ let rec remove e l = match l with
 let rec read_mem l m = match m with
     | [] -> raise Not_In_Memory
     | a :: rest -> if (fst a = l) then (snd a) else (read_mem l rest)
+
+let rec assign_mem label v m = match m with
+    | [] -> m
+    | head::tail -> if (label = (fst head)) then
+                (label, v)::(assign_mem label v tail)
+              else
+                head::(assign_mem label v tail)
 
 (* 
 returns a list of strings, which are the names of the variables that are
@@ -187,6 +196,10 @@ let rec step (e : exp) (m : memory) = match e with
             | False -> ((substitution body var arg), m)
             | Lambda(v,t,b) -> ((substitution body var (Lambda(v,t,b))), m)
             | LambdaRec(name, t1, t2, var, body) -> ((substitution body var arg), m)
+            | Label(n) -> ((substitution body var arg), m)
+            (* | Malloc(v) -> let p = (step arg m) in ((substitution body var (fst p)), (snd p)) *)
+            (* | Sequence(e1, e2) -> let p = (step arg m) in ((substitution body var (fst p)), (snd p)) *)
+            (* | Assign(e1, e2) -> let p = (step arg m) in ((substitution body var (fst p)), (snd p)) *)
             | Var(x) -> raise Eval_error
             | RaiseDivByZero(typ, n) -> ((RaiseDivByZero(typ, n)), m)
             | notValue -> let p = (step arg m) in (Apply(func, fst p)), union (snd p) m)
@@ -236,21 +249,20 @@ let rec step (e : exp) (m : memory) = match e with
         match v with
         | Label(n) -> (
             match m with
-            | [] -> raise Not_In_Memory
+            | [] -> raise Eval_error
             | elem :: rest -> if (fst elem = n) then (snd elem, m) else step (Mread(v)) rest
             )
         | otherwise -> let p = (step v m) in (Mread(fst p), union (snd p) m)
     )
+    (* Assign takes (Label, Expression) *)
+    (* replaces value at Label with Expression *)
     | Assign(e1, e2) -> (
         match e1 with
-        | Label(n) -> (
-            match m with
-            | [] -> raise Eval_error (*TODO - replace bits of memory*)
-            | elem :: rest -> raise Eval_error
-        )
+        | Label(n) -> let p = (step e2 m) in (Unit, (assign_mem n (fst p) (snd p)))
         | otherwise -> let p = (step e1 m) in (Assign(fst p, e2), union (snd p) m)
     )
-    | Sequence(e1, e2) -> raise Eval_error
+    (* executes this sequence of instructions. 1 then 2. if 1 is unit then done *)
+    | Sequence(e1, e2) -> let p = (step e1 m) in if ((fst p) = Unit) then (e2, m) else ((Sequence((fst p), e2)), (snd p))
 
     | True -> (e, m)
     | False -> (e, m)
@@ -307,31 +319,9 @@ let rec string_of_exp (e : exp) = match e with
     | RaiseDivByZero(typ, e1) -> "RaiseDivByZero (" ^ (string_of_typ typ) ^ ", " ^ (string_of_exp e1) ^")"
     | Label(n) -> "(Label " ^ string_of_int n ^ ")"
     | other -> "MISSING STRING_TO_EXP INFO"
-    
+
 let () =
-    (* References/Memory *)
-    (print_endline "\n1-2\n");
-    (* 1-2 *)
-
-    (print_endline (string_of_exp ((multi_step (Malloc (Num 1)) [] |> fst))));
-    (print_endline (string_of_exp ((multi_step (Mread (Malloc (Malloc (Num 1)))) [] |> fst))));
-
-    (* (print_endline "\n3-4\n");
-    (* 3-4 *)
-
-    (print_endline (string_of_exp (multi_step
-  (Apply (Lambda ("n", TRef TInt, Mread (Var "n")), Label 0))
-  [])));
-    (print_endline (string_of_exp (( multi_step
-    (Apply
-       ( Lambda ("n", TRef TInt, Mread (Var "n"))
-       , Malloc (Plus (Num 5, Num 1)) ))
-    []
-|> fst ))));
-
-    (print_endline "\n5\n");
     (* 5 *)
-
     (print_endline (string_of_exp (( multi_step
     (Apply
        ( Lambda
@@ -342,84 +332,4 @@ let () =
                , Mread (Var "b") ) )
        , Malloc True ))
     []
-|> fst ))));
-
-    (print_endline "\n6\n");
-    (* 6 *)
-
-    (print_endline (string_of_exp (( multi_step
-    (Apply
-       ( Lambda
-           ( "n"
-           , TRef TInt
-           , Sequence
-               ( Assign (Var "n", Plus (Mread (Var "n"), Num 1))
-               , Assign (Var "n", Mult (Mread (Var "n"), Num 2)) ) )
-       , Malloc (Num 3) ))
-    []
-|> fst ))));
-
-    (print_endline "\n7\n");
-    (* 7 *)
-    
-    (print_endline (string_of_exp (( multi_step
-    (Apply
-       ( Lambda
-           ( "n"
-           , TRef TInt
-           , Apply
-               ( Lambda
-                   ( "f"
-                   , TArrow (TUnit, TUnit)
-                   , Sequence
-                       ( Apply (Var "f", Unit)
-                       , Sequence (Apply (Var "f", Unit), Mread (Var "n"))
-                       ) )
-               , Lambda
-                   ( "_"
-                   , TUnit
-                   , Assign (Var "n", Div (Mread (Var "n"), Num 2)) ) )
-           )
-       , Malloc (Num 32) ))
-    []
-|> fst ))));
-
-    (print_endline "\n8\n");
-    (* 8 *)
-
-    (print_endline (string_of_exp (( multi_step
-    (Apply
-       ( Apply
-           ( Apply
-               ( Lambda
-                   ( "x"
-                   , TRef TInt
-                   , Lambda
-                       ( "y"
-                       , TRef TInt
-                       , Lambda
-                           ( "z"
-                           , TInt
-                           , Apply
-                               ( Lambda
-                                   ( "f"
-                                   , TArrow (TInt, TInt)
-                                   , Sequence
-                                       ( Assign (Var "x", Num 10)
-                                       , Sequence
-                                           ( Assign (Var "y", Num 12)
-                                           , Apply
-                                               (Var "f", Mread (Var "y"))
-                                           ) ) )
-                               , Lambda
-                                   ( "a"
-                                   , TInt
-                                   , Plus
-                                       ( Var "a"
-                                       , Plus (Mread (Var "x"), Var "z")
-                                       ) ) ) ) ) )
-               , Malloc (Num 0) )
-           , Malloc (Num 0) )
-       , Num 20 ))
-    []
-|> fst )))); *)
+|> fst ))))
